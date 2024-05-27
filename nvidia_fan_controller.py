@@ -194,22 +194,37 @@ def run_cmd(cmd: List[str]) -> str:
     return p.stdout.read().decode()
 
 
+def get_fans() -> Dict[int, List[int]]:
+    stdout = run_cmd(['nvidia-settings', '-q', 'gpus', '--verbose'])
+
+    gpu_fan_info = {}
+    gpu_blocks = re.findall(r'\[gpu:(\d+)\](.*?)Sensor \d+\)', stdout, flags=re.DOTALL)
+    for gpu_id, gpu_block in gpu_blocks:
+        fan_ids = re.findall(r'\[fan:(\d+)\]', gpu_block)
+        gpu_fan_info[int(gpu_id)] = [int(fan_id) for fan_id in fan_ids]
+
+    for gpu_id in gpu_fan_info:
+        logger.info("GPU %d has fan IDs %s", gpu_id, str(gpu_fan_info[gpu_id]))
+
+    return gpu_fan_info  # {gpu_id: [fan_id,...]}
+
+
 def get_measurements() -> List[Tuple[int, int, int]]:
     stdout = run_cmd(['nvidia-smi', '--query-gpu=index,temperature.gpu,fan.speed', '--format=csv,noheader'])
     measurements = re.findall(r'(\d+), (\d+), (\d+) %', stdout, flags=re.MULTILINE)
     measurements = [tuple(map(int, values)) for values in measurements]  # parse ints
-    return measurements  # [(index, temperature, fanspeed)]
+    return measurements  # [(gpu_index, temperature, fanspeed)]
 
 
-def get_fan_speed(index: int) -> int:
-    fan_speed = run_cmd(['nvidia-settings', '--query', f'[fan-{index:d}]/GPUTargetFanSpeed', '--terse'])
-    logger.debug("Current fan speed setting: [fan-%d]/GPUTargetFanSpeed=%s", index, fan_speed)
+def get_fan_speed(fan_index: int) -> int:
+    fan_speed = run_cmd(['nvidia-settings', '--query', f'[fan-{fan_index:d}]/GPUTargetFanSpeed', '--terse'])
+    logger.debug("Current fan speed setting: [fan-%d]/GPUTargetFanSpeed=%s", fan_index, fan_speed)
     return int(fan_speed)
 
 
-def set_fan_speed(index: int, fan_speed: int) -> None:
-    config = f'[fan-{index:d}]/GPUTargetFanSpeed={fan_speed:d}'
-    logger.info("Setting new fan speed: %s", config)
+def set_fan_speed(gpu_index: int, fan_index: int, fan_speed: int) -> None:
+    config = f'[fan-{fan_index:d}]/GPUTargetFanSpeed={fan_speed:d}'
+    logger.info("Setting new fan speed for GPU %d: %s", gpu_index, config)
     run_cmd(['nvidia-settings', '--assign', config])
 
 
@@ -243,24 +258,29 @@ def main() -> None:
         create_service_file(target_temperature=args.target_temperature, interval_secs=args.interval_secs)
         sys.exit()
 
-    if not get_measurements():
-        raise RuntimeError("no gpu detected")
+    initial_values = get_measurements()
+
+    if not initial_values:
+        raise RuntimeError("No GPU or fans detected")
 
     # give each GPU its own controller
     controllers = {
         index: PIDController(x_target=args.target_temperature, u_min=10, u_max=100, u_start=max(temp / 0.9, speed), e_total_min=-10)
-        for index, temp, speed in get_measurements()}
+        for index, temp, speed in initial_values}
+
+    fans = get_fans()
 
     with ManualFanControl():
         while True:
-            for index, temp, _ in get_measurements():
+            for gpu_index, temp, _ in get_measurements():
                 # new speed proposed by PID-controller
-                controller = controllers[index]
+                controller = controllers[gpu_index]
                 fan_speed = int(round(controller(temp)))
 
-                # only update if change is non-trivial
-                if fan_speed != get_fan_speed(index):
-                    set_fan_speed(index, fan_speed)
+                for fan_index in fans[gpu_index]:
+                    # only update if change is non-trivial
+                    if fan_speed != get_fan_speed(fan_index):
+                        set_fan_speed(gpu_index, fan_index, fan_speed)
 
             sleep(args.interval_secs)
 

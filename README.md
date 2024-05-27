@@ -9,6 +9,8 @@ python3 nvidia_fan_controller.py --target-temperature 60
 This script uses a simple [PID-controller](https://en.wikipedia.org/wiki/PID_controller) to regulate
 the fan speed.
 
+Supports GPUs with multiple fans.
+
 
 ## Dependencies
 
@@ -20,8 +22,10 @@ however, require the following two command-line utilities:
 
 Please make sure that these are installed on your system.
 
-Also, make sure that you've enabled manual fan control on your system. This can be done by using the
-`nvidia-xconfig` command-line utility:
+Also, make sure that you've enabled manual fan control on your system if you are using an X server
+ (Wayland users don't need to do anything).
+
+This can be done by using the `nvidia-xconfig` command-line utility:
 
 ```
 nvidia-xconfig --cool-bits=4
@@ -113,7 +117,7 @@ sudo rm /etc/systemd/system/nvidia-fan-controller.service
 ```
 
 
-## Example xorg.conf
+## Example xorg.conf (X server only, ignore for Wayland)
 
 Here's the xorg.conf that I use for my system. I've got three GPUs: one GTX 1080Ti and two GTX
 1070Ti. This `/etc/X11/xorg.conf` file sets the
